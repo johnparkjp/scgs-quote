@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SCGS 견적서 변환</title>
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Malgun Gothic', '맑은 고딕', sans-serif; background: #f5f5f5; color: #333; }
+    .container { max-width: 1000px; margin: 0 auto; padding: 20px; }
+    h1 { text-align: center; margin: 20px 0; color: #1a237e; font-size: 24px; }
+    .subtitle { text-align: center; color: #666; margin-bottom: 30px; font-size: 14px; }
+    .card { background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 20px; }
+    .card h2 { font-size: 16px; color: #1a237e; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #e8eaf6; }
+    .upload-area { border: 2px dashed #c5cae9; border-radius: 8px; padding: 40px; text-align: center; cursor: pointer; transition: all 0.2s; }
+    .upload-area:hover, .upload-area.dragover { border-color: #3f51b5; background: #e8eaf6; }
+    .upload-area input { display: none; }
+    .upload-area .icon { font-size: 48px; margin-bottom: 12px; }
+    .upload-area p { color: #666; }
+    .upload-area .filename { color: #3f51b5; font-weight: bold; margin-top: 8px; }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .form-group { display: flex; flex-direction: column; }
+    .form-group.full { grid-column: 1 / -1; }
+    .form-group label { font-size: 13px; color: #555; margin-bottom: 4px; font-weight: bold; }
+    .form-group input, .form-group select { padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+    .form-group input:focus { outline: none; border-color: #3f51b5; }
+    .model-section { margin-bottom: 16px; border: 1px solid #e0e0e0; border-radius: 6px; overflow: hidden; }
+    .model-header { background: #e8eaf6; padding: 12px 16px; display: flex; align-items: center; gap: 12px; cursor: pointer; }
+    .model-header:hover { background: #c5cae9; }
+    .model-header .model-info { flex: 1; }
+    .model-header .model-name { font-weight: bold; font-size: 14px; }
+    .model-header .model-detail { font-size: 12px; color: #666; margin-top: 2px; }
+    .model-body { padding: 8px 16px; max-height: 300px; overflow-y: auto; }
+    .build-line { display: flex; align-items: center; padding: 4px 0; gap: 8px; font-size: 13px; border-bottom: 1px solid #f5f5f5; }
+    .build-line:last-child { border-bottom: none; }
+    .build-line.filtered { opacity: 0.5; }
+    .build-line label { flex: 1; cursor: pointer; }
+    .build-line .qty { color: #888; min-width: 40px; text-align: right; }
+    .toggle-btn { padding: 4px 10px; font-size: 11px; border: 1px solid #ccc; border-radius: 3px; background: #fff; cursor: pointer; }
+    .toggle-btn:hover { background: #f0f0f0; }
+    .btn { padding: 12px 32px; border: none; border-radius: 6px; font-size: 15px; font-weight: bold; cursor: pointer; transition: all 0.2s; }
+    .btn-primary { background: #3f51b5; color: #fff; }
+    .btn-primary:hover { background: #303f9f; }
+    .btn-primary:disabled { background: #bbb; cursor: not-allowed; }
+    .btn-group { text-align: center; margin-top: 20px; }
+    .hidden { display: none; }
+    .loading { text-align: center; padding: 20px; color: #666; }
+    .error { color: #d32f2f; background: #ffebee; padding: 12px; border-radius: 4px; margin: 8px 0; }
+    .success { color: #2e7d32; background: #e8f5e9; padding: 12px; border-radius: 4px; margin: 8px 0; }
+    @media (max-width: 600px) {
+      .form-grid { grid-template-columns: 1fr; }
+      .container { padding: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Dell → SCGS 견적서 변환</h1>
+    <p class="subtitle">Dell 견적서(XML)를 업로드하면 SCGS 견적서 양식으로 자동 변환합니다.</p>
+
+    <!-- Step 1: 파일 업로드 -->
+    <div class="card" id="step1">
+      <h2>1. Dell 견적서 업로드</h2>
+      <div class="upload-area" id="uploadArea">
+        <input type="file" id="fileInput" accept=".xml">
+        <div class="icon">📄</div>
+        <p>클릭하거나 파일을 드래그하여 업로드</p>
+        <p style="font-size:12px; color:#999; margin-top:8px;">지원 형식: XML</p>
+        <div class="filename hidden" id="fileName"></div>
+      </div>
+      <div id="parseError" class="error hidden"></div>
+      <div id="parseLoading" class="loading hidden">파일 분석 중...</div>
+    </div>
+
+    <!-- Step 2: 견적 정보 입력 + 부품 선택 -->
+    <div class="card hidden" id="step2">
+      <h2>2. 견적 정보 입력</h2>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>견적번호</label>
+          <input type="text" id="quoteNumber" placeholder="예: SCGS-26-Z0303004-001-...">
+        </div>
+        <div class="form-group">
+          <label>견적일자</label>
+          <input type="date" id="quoteDate">
+        </div>
+        <div class="form-group">
+          <label>수신 (리셀러명)</label>
+          <input type="text" id="recipient">
+        </div>
+        <div class="form-group">
+          <label>견적 유효 기간</label>
+          <input type="text" id="validityPeriod" value="견적일로부터 2주">
+        </div>
+        <div class="form-group">
+          <label>결제 조건</label>
+          <input type="text" id="paymentTerms" value="발주 후 익월 말 현금">
+        </div>
+        <div class="form-group">
+          <label>유상유지보수</label>
+          <input type="text" id="maintenance" value="별도 협의">
+        </div>
+        <div class="form-group">
+          <label>결제 계좌</label>
+          <input type="text" id="bankAccount" value="신한은행 140-008-930655">
+        </div>
+        <div class="form-group">
+          <label>담당자</label>
+          <input type="text" id="manager" value="Dell 사업부 홍길동 대리">
+        </div>
+      </div>
+    </div>
+
+    <div class="card hidden" id="step3">
+      <h2>3. 포함할 부품 선택</h2>
+      <p style="font-size:13px; color:#666; margin-bottom:12px;">불필요한 항목을 체크 해제하세요. 기본값은 전체 선택입니다.</p>
+      <div id="modelList"></div>
+    </div>
+
+    <!-- Step 3: 다운로드 -->
+    <div class="btn-group hidden" id="step4">
+      <button class="btn btn-primary" id="generateBtn" onclick="generateExcel()">SCGS 견적서 다운로드</button>
+      <div id="genLoading" class="loading hidden">Excel 생성 중...</div>
+      <div id="genError" class="error hidden"></div>
+    </div>
+  </div>
+
+<script>
+// ============================================================
+// 1. XML 파서 (DOMParser — 브라우저 네이티브, 라이브러리 불필요)
+// ============================================================
+function parseDellXml(xmlString) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlString, 'text/xml');
+  const getTag = (el, tag) => {
+    const n = el.getElementsByTagName(tag)[0];
+    return n ? n.textContent.trim() : '';
+  };
+  const getTags = (el, tag) => Array.from(el.getElementsByTagName(tag));
+
+  const docEl = doc.getElementsByTagName('DOCUMENT')[0];
+  const header = docEl.getElementsByTagName('DOCUMENT_HEADER')[0];
+  const summary = docEl.getElementsByTagName('SUMMARY_TOTALS')[0];
+  const reseller = docEl.getElementsByTagName('RESELLER_ADDRESS')[0];
+
+  const models = [];
+  const modelBuildRows = getTags(docEl, 'MODEL_BUILD_ROW');
+  for (const mbr of modelBuildRows) {
+    const description = getTag(mbr, 'MODEL_DESCRIPTION');
+    const qty = parseInt(getTag(mbr, 'MODEL_QTY'), 10) || 0;
+    const unitPrice = parseFloat(getTag(mbr, 'MODEL_UNIT_PRICE')) || 0;
+
+    const buildLines = [];
+    const lineRows = getTags(mbr, 'BUILD_LINES_ROW');
+    for (const lr of lineRows) {
+      buildLines.push({
+        description: getTag(lr, 'ITEM_DESCRIPTION'),
+        qty: parseInt(getTag(lr, 'LINE_QTY'), 10) || 1,
+        sku: getTag(lr, 'ITEM_NUMBER') || getTag(lr, 'SKU_NUMBER'),
+      });
+    }
+
+    models.push({ description, category: detectCategory(description), qty, unitPrice, buildLines });
+  }
+
+  return {
+    docNumber: getTag(header, 'DOCUMENT_NUMBER') || getTag(docEl, 'DOC_NUMBER'),
+    docDate: getTag(header, 'DOC_DATE'),
+    resellerName: reseller ? getTag(reseller, 'COMPANY_NAME') : '',
+    models,
+  };
+}
+
+// ============================================================
+// 2. 유틸리티 (detectCategory, getDefaultSelected)
+// ============================================================
+function detectCategory(description) {
+  const desc = description.toUpperCase();
+  if (desc.includes('POWEREDGE') || desc.includes('서버')) return '서버';
+  if (desc.includes('POWERSTORE') || desc.includes('STORAGE') || desc.includes('스토리지')) return '스토리지';
+  if (desc.includes('SWITCH') || desc.includes('네트워크')) return '네트워크';
+  if (desc.includes('POWERVAULT')) return '스토리지';
+  return '서버';
+}
+
+function getDefaultSelected(description) {
+  const desc = description.trim();
+  const upper = desc.toUpperCase();
+  if (/^No\s/i.test(desc) || /^None\s/i.test(desc)) return false;
+  if (/,\s*No\s/i.test(desc)) return false;
+  if (upper.startsWith('UNCONFIGURED')) return false;
+  const excludeKeywords = [
+    'Additional Processor Selected', 'Performance Optimized', 'Performance BIOS Settings',
+    'Power Saving Dell Active Power Controller', 'UEFI BIOS Boot Mode', 'Dell Luggage Tag',
+    'Dell Connectivity Module', 'Dell Secure Onboarding Client', 'Dell Connectivity Client',
+    'Front PERC Mechanical Parts', 'MT/s RDIMMs', 'MT/s LRDIMMs',
+  ];
+  for (const kw of excludeKeywords) {
+    if (upper.includes(kw.toUpperCase())) return false;
+  }
+  if (upper.includes('SHIPPING')) return false;
+  if (upper.includes('CCC') && upper.includes('MARKING')) return false;
+  if (upper.includes('BASIC NEXT BUSINESS DAY')) return false;
+  if (upper.includes('CERTIFIED DEPLOYMENT PARTNER')) return false;
+  if (upper.includes('GCP OPERATIONS MANAGEMENT')) return false;
+  return true;
+}
+
+// ============================================================
+// 3. Excel 생성 (ExcelJS + JSZip — 브라우저에서 직접 실행)
+// ============================================================
+const ITEM_START_ROW = 12;
+const FONT_BASE = { name: '맑은 고딕', family: 3, charset: 129, scheme: 'minor' };
+const BORDER_THIN = {
+  top: { style: 'thin', color: { indexed: 64 } },
+  left: { style: 'thin', color: { indexed: 64 } },
+  bottom: { style: 'thin', color: { indexed: 64 } },
+  right: { style: 'thin', color: { indexed: 64 } },
+};
+const FILL_GRAY = { type: 'pattern', pattern: 'solid', fgColor: { theme: 0, tint: -0.249977111117893 }, bgColor: { indexed: 64 } };
+const FILL_G = { type: 'pattern', pattern: 'solid', fgColor: { theme: 0 }, bgColor: { indexed: 64 } };
+
+// 템플릿 캐시 (최초 1회만 fetch)
+let templateCache = null;
+async function getTemplate() {
+  if (templateCache) return templateCache;
+  const resp = await fetch('template.xlsx');
+  templateCache = await resp.arrayBuffer();
+  return templateCache;
+}
+
+async function generateScgsExcelBrowser(quoteData, userInput, selectedItems) {
+  const templateBuf = await getTemplate();
+
+  // ExcelJS로 셀 데이터 작성
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(templateBuf);
+  const ws = workbook.worksheets[0];
+
+  // 원본 drawing/media 보존
+  const templateZip = await JSZip.loadAsync(templateBuf);
+  const origDrawingXml = await templateZip.file('xl/drawings/drawing1.xml').async('string');
+  const origDrawingRels = await templateZip.file('xl/drawings/_rels/drawing1.xml.rels').async('string');
+  const origMediaFiles = {};
+  templateZip.folder('xl/media').forEach((relPath, file) => {
+    origMediaFiles['xl/media/' + relPath] = file;
+  });
+
+  // --- 헤더 영역 ---
+  ws.getCell('D4').value = userInput.quoteNumber || '';
+  const dateStr = userInput.quoteDate || quoteData.docDate || '';
+  if (dateStr) {
+    const d = new Date(dateStr + 'T12:00:00');
+    ws.getCell('D5').value = d;
+    ws.getCell('D5').numFmt = 'YYYY-MM-DD';
+  }
+  ws.getCell('D6').value = userInput.recipient || quoteData.resellerName || '';
+
+  // --- 기존 병합 해제 & 클리어 ---
+  const merges = [...(ws.model.merges || [])];
+  for (const mergeRef of merges) {
+    const rowMatch = mergeRef.match(/(\d+)/);
+    if (rowMatch && parseInt(rowMatch[1]) >= ITEM_START_ROW) {
+      try { ws.unMergeCells(mergeRef); } catch (e) { /* ignore */ }
+    }
+  }
+  for (let r = ITEM_START_ROW; r <= 60; r++) {
+    for (let c = 2; c <= 9; c++) {
+      const cell = ws.getCell(r, c);
+      cell.value = null;
+      cell.style = {};
+    }
+  }
+
+  // --- 품목 데이터 준비 ---
+  const modelRows = [];
+  for (let mi = 0; mi < quoteData.models.length; mi++) {
+    const model = quoteData.models[mi];
+    const filteredLines = [];
+    for (let li = 0; li < model.buildLines.length; li++) {
+      if (selectedItems?.[mi]?.[li] !== false) {
+        filteredLines.push(model.buildLines[li]);
+      }
+    }
+    const consolidated = [];
+    for (const line of filteredLines) {
+      const prev = consolidated[consolidated.length - 1];
+      if (prev && prev.sku && prev.sku === line.sku && prev.description === line.description) {
+        prev.qty += line.qty;
+      } else {
+        consolidated.push({ ...line });
+      }
+    }
+    modelRows.push({ model, filteredLines: consolidated });
+  }
+
+  // 스타일
+  const centerAlign = { horizontal: 'center', vertical: 'middle' };
+  const leftAlign = { horizontal: 'left', vertical: 'middle', wrapText: true };
+  const font10 = { ...FONT_BASE, size: 10, color: { theme: 1 } };
+  const font10Bold = { ...FONT_BASE, size: 10, bold: true, color: { theme: 1 } };
+  const font9 = { ...FONT_BASE, size: 9, color: { theme: 1 } };
+  const font9Bold = { ...FONT_BASE, size: 9, bold: true, color: { theme: 1 } };
+
+  let currentRow = ITEM_START_ROW;
+  let itemNo = 1;
+
+  for (const { model, filteredLines } of modelRows) {
+    ws.getRow(currentRow).height = 33.6;
+    setCell(ws, currentRow, 2, itemNo, centerAlign, BORDER_THIN, font10Bold);
+    ws.mergeCells(`C${currentRow}:D${currentRow}`);
+    setCell(ws, currentRow, 3, model.category, centerAlign, BORDER_THIN, font10Bold);
+    ws.getCell(`D${currentRow}`).border = BORDER_THIN;
+    setCell(ws, currentRow, 5, model.description, leftAlign, BORDER_THIN, font10Bold);
+    setCell(ws, currentRow, 6, model.qty, centerAlign, BORDER_THIN, font10Bold, '#,##0');
+    setCellWithFill(ws, currentRow, 7, model.unitPrice, { vertical: 'middle' }, BORDER_THIN, font10, '#,##0', FILL_G);
+    setCell(ws, currentRow, 8, { formula: `G${currentRow}*F${currentRow}` }, { vertical: 'middle' }, BORDER_THIN, font10Bold, '#,##0');
+    setCell(ws, currentRow, 9, null, null, BORDER_THIN);
+    currentRow++;
+
+    for (const line of filteredLines) {
+      ws.getRow(currentRow).height = 17.45;
+      setCell(ws, currentRow, 2, null, centerAlign, BORDER_THIN, font9Bold);
+      ws.mergeCells(`C${currentRow}:D${currentRow}`);
+      setCell(ws, currentRow, 3, line.sku || null, centerAlign, BORDER_THIN, font9Bold);
+      ws.getCell(`D${currentRow}`).border = BORDER_THIN;
+      setCell(ws, currentRow, 5, line.description, { ...leftAlign, indent: 1 }, BORDER_THIN, font9);
+      setCell(ws, currentRow, 6, line.qty >= 2 ? line.qty : null, centerAlign, BORDER_THIN, font9, '#,##0');
+      setCellWithFill(ws, currentRow, 7, null, null, BORDER_THIN, null, null, FILL_G);
+      setCell(ws, currentRow, 8, null, null, BORDER_THIN);
+      setCell(ws, currentRow, 9, null, null, BORDER_THIN);
+      currentRow++;
+    }
+    itemNo++;
+  }
+
+  const lastItemRow = currentRow - 1;
+
+  // --- 합계 ---
+  const subtotalRow = currentRow;
+  const vatRow = currentRow + 1;
+  const totalRow = currentRow + 2;
+  writeTotalRow(ws, subtotalRow, '합계(VAT별도)', `SUM(H${ITEM_START_ROW}:H${lastItemRow})`);
+  writeTotalRow(ws, vatRow, '부가세', `G${subtotalRow}*10%`);
+  writeTotalRow(ws, totalRow, '제안가 합계(VAT포함)', `G${subtotalRow}+G${vatRow}`);
+
+  // 견적금액
+  ws.getCell('D9').value = {
+    formula: `TEXT(G${totalRow},"[DBNum4][$-412]G/표준 ")&"  ("&TEXT(G${totalRow},"#,##0")&", VAT포함)"`,
+    result: '',
+  };
+
+  // --- REMARKS ---
+  const remarksStart = totalRow + 1;
+  const THIN_SIDE = { style: 'thin', color: { indexed: 64 } };
+  const BORDER_LEFT = { left: THIN_SIDE };
+  const BORDER_RIGHT = { right: THIN_SIDE };
+  const BORDER_TOP_LEFT = { top: THIN_SIDE, left: THIN_SIDE };
+  const BORDER_TOP_RIGHT = { top: THIN_SIDE, right: THIN_SIDE };
+  const BORDER_TOP_ONLY = { top: THIN_SIDE };
+  const BORDER_BOTTOM_LEFT = { bottom: THIN_SIDE, left: THIN_SIDE };
+  const BORDER_BOTTOM_RIGHT = { bottom: THIN_SIDE, right: THIN_SIDE };
+  const BORDER_BOTTOM_ONLY = { bottom: THIN_SIDE };
+
+  const remarksLines = [
+    { text: '[ REMARKS ]', bold: true, size: 10 },
+    { text: `1. 견적 유효 기간 : ${userInput.validityPeriod || ''}` },
+    { text: `2. 결제 조건 : ${userInput.paymentTerms || ''}` },
+    { text: `3. 유상유지보수 : ${userInput.maintenance || ''}` },
+    { text: `4. 결제 계좌 : ${userInput.bankAccount || ''}` },
+    { text: `5. 담당자 : ${userInput.manager || ''}` },
+  ];
+  for (let i = 0; i < remarksLines.length; i++) {
+    const r = remarksStart + i;
+    ws.getRow(r).height = 16;
+    const cell = ws.getCell(`B${r}`);
+    cell.value = remarksLines[i].text;
+    cell.alignment = { horizontal: 'left', vertical: 'middle' };
+    cell.font = { ...FONT_BASE, size: remarksLines[i].size || 9, bold: remarksLines[i].bold || false, color: { theme: 1 } };
+    if (i === 0) {
+      cell.border = BORDER_TOP_LEFT;
+      for (let c = 3; c <= 8; c++) ws.getCell(r, c).border = BORDER_TOP_ONLY;
+      ws.getCell(`I${r}`).border = BORDER_TOP_RIGHT;
+    } else {
+      cell.border = BORDER_LEFT;
+      ws.getCell(`I${r}`).border = BORDER_RIGHT;
+    }
+  }
+
+  const remarksEnd = remarksStart + remarksLines.length - 1;
+
+  // --- 발주 확인 ---
+  const orderStart = remarksEnd + 2;
+  ws.getCell(`B${remarksEnd + 1}`).border = BORDER_LEFT;
+  ws.getCell(`I${remarksEnd + 1}`).border = BORDER_RIGHT;
+
+  ws.getRow(orderStart).height = 30;
+  ws.mergeCells(`B${orderStart}:I${orderStart}`);
+  const orderCell = ws.getCell(`B${orderStart}`);
+  orderCell.value = '당사는 이 견적서상의 가격 및 조건들을 수용하며, 이 견적서를 귀사에 대한 공식 발주서로 대신하는데 동의합니다.';
+  orderCell.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
+  orderCell.font = { ...FONT_BASE, size: 10, bold: true, color: { argb: 'FFFF0000' } };
+  orderCell.border = BORDER_LEFT;
+  ws.getCell(`I${orderStart}`).border = BORDER_RIGHT;
+
+  ws.getCell(`B${orderStart + 1}`).border = BORDER_LEFT;
+  ws.getCell(`I${orderStart + 1}`).border = BORDER_RIGHT;
+
+  const orderLabels = [
+    { label: 'ㆍ배송지 :', labelMerge: 'B:C', valueMerge: 'D:H', valueText: '' },
+    { label: 'ㆍ수령인 : ', labelMerge: 'B:C', valueMerge: 'D:H', valueText: '(성명)                  (연락처)' },
+    { label: 'ㆍ세금계산서 담당자 :', labelMerge: 'B:D', valueMerge: 'E:H', valueText: '' },
+    { label: 'ㆍ발주업체 :', labelMerge: 'B:C', valueMerge: 'D:I', valueText: '(아래 빈 공간에 업체의 명판 및 인감을 날인해 주십시오. 명판,직인이 날인되지 않은 경우 정상 발주되지 않을 수 있습니다.)' },
+  ];
+  for (let i = 0; i < orderLabels.length; i++) {
+    const r = orderStart + 2 + i;
+    const ol = orderLabels[i];
+    const isLast = (i === orderLabels.length - 1);
+    ws.getRow(r).height = 20;
+    const [lblStart, lblEnd] = ol.labelMerge.split(':');
+    ws.mergeCells(`${lblStart}${r}:${lblEnd}${r}`);
+    const lbl = ws.getCell(`${lblStart}${r}`);
+    lbl.value = ol.label;
+    lbl.alignment = { horizontal: 'right', vertical: 'middle' };
+    lbl.font = { ...FONT_BASE, size: 10, bold: true, color: { theme: 1 } };
+    lbl.border = isLast ? BORDER_BOTTOM_LEFT : BORDER_LEFT;
+    if (ol.valueText) {
+      const [valStart, valEnd] = ol.valueMerge.split(':');
+      ws.mergeCells(`${valStart}${r}:${valEnd}${r}`);
+      const v = ws.getCell(`${valStart}${r}`);
+      v.value = ol.valueText;
+      v.alignment = { horizontal: 'left', vertical: 'middle' };
+      v.font = { ...FONT_BASE, size: 9, color: { argb: 'FF808080' } };
+      if (isLast) v.border = BORDER_BOTTOM_ONLY;
+    }
+    ws.getCell(`I${r}`).border = isLast ? BORDER_BOTTOM_RIGHT : BORDER_RIGHT;
+    if (isLast) {
+      const valStartCol = ol.labelMerge === 'B:D' ? 5 : 4;
+      for (let c = 3; c <= 8; c++) {
+        if (c < valStartCol) ws.getCell(r, c).border = BORDER_BOTTOM_ONLY;
+      }
+    }
+  }
+
+  const orderEnd = orderStart + 2 + orderLabels.length - 1;
+
+  // --- 하단 이미지 위치 계산 ---
+  const newImageBaseRow = orderEnd + 6;
+  const origImageBaseRow = 50;
+  const rowShift = newImageBaseRow - origImageBaseRow;
+
+  const wwwRow = newImageBaseRow + 4;
+  ws.getCell(`I${wwwRow}`).value = 'www.scgs.co.kr';
+  ws.getCell(`I${wwwRow}`).font = { ...FONT_BASE, size: 9, color: { theme: 0, tint: -0.499984740745262 } };
+  ws.getCell(`I${wwwRow}`).alignment = { vertical: 'middle' };
+
+  // ExcelJS 이미지 모델 제거
+  ws.getImages().length = 0;
+  if (ws._media) ws._media = [];
+
+  const excelBuf = await workbook.xlsx.writeBuffer();
+
+  // --- JSZip으로 drawing/media 복원 ---
+  const modifiedDrawing = shiftBottomImageRows(origDrawingXml, rowShift);
+  const outZip = await JSZip.loadAsync(excelBuf);
+  outZip.file('xl/drawings/drawing1.xml', modifiedDrawing);
+  outZip.file('xl/drawings/_rels/drawing1.xml.rels', origDrawingRels);
+  outZip.remove('xl/media');
+  for (const [filePath, file] of Object.entries(origMediaFiles)) {
+    outZip.file(filePath, await file.async('arraybuffer'));
+  }
+  const sheetFiles = [];
+  outZip.folder('xl/worksheets').forEach((relPath) => {
+    if (relPath.match(/^sheet\d+\.xml$/)) sheetFiles.push('xl/worksheets/' + relPath);
+  });
+  for (const sheetPath of sheetFiles) {
+    const sheetXml = await outZip.file(sheetPath).async('string');
+    if (!sheetXml.includes('drawing')) {
+      outZip.file(sheetPath, sheetXml.replace('</worksheet>', '<drawing r:id="rId1"/></worksheet>'));
+    }
+    const relsPath = sheetPath.replace('xl/worksheets/', 'xl/worksheets/_rels/') + '.rels';
+    const relsFile = outZip.file(relsPath);
+    if (relsFile) {
+      const relsXml = await relsFile.async('string');
+      if (!relsXml.includes('drawing')) {
+        outZip.file(relsPath, relsXml.replace('</Relationships>',
+          '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>'));
+      }
+    } else {
+      outZip.file(relsPath,
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>' +
+        '</Relationships>');
+    }
+  }
+
+  return await outZip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+}
+
+function setCell(ws, row, col, value, alignment, border, font, numFmt) {
+  const cell = ws.getCell(row, col);
+  if (value !== null && value !== undefined) cell.value = value;
+  if (alignment) cell.alignment = alignment;
+  if (border) cell.border = border;
+  if (font) cell.font = font;
+  if (numFmt) cell.numFmt = numFmt;
+}
+function setCellWithFill(ws, row, col, value, alignment, border, font, numFmt, fill) {
+  const cell = ws.getCell(row, col);
+  if (value !== null && value !== undefined) cell.value = value;
+  if (alignment) cell.alignment = alignment;
+  if (border) cell.border = border;
+  if (font) cell.font = font;
+  if (numFmt) cell.numFmt = numFmt;
+  if (fill) cell.fill = fill;
+}
+function writeTotalRow(ws, rowNum, label, formula) {
+  const boldFont = { ...FONT_BASE, size: 11, bold: true, color: { theme: 1 } };
+  ws.getRow(rowNum).height = 20;
+  ws.mergeCells(`B${rowNum}:F${rowNum}`);
+  const lbl = ws.getCell(`B${rowNum}`);
+  lbl.value = label;
+  lbl.alignment = { horizontal: 'center', vertical: 'middle' };
+  lbl.font = boldFont;
+  lbl.border = BORDER_THIN;
+  lbl.fill = FILL_GRAY;
+  for (const col of ['C', 'D', 'E', 'F']) {
+    ws.getCell(`${col}${rowNum}`).border = BORDER_THIN;
+    ws.getCell(`${col}${rowNum}`).fill = FILL_GRAY;
+  }
+  ws.mergeCells(`G${rowNum}:H${rowNum}`);
+  const val = ws.getCell(`G${rowNum}`);
+  val.value = { formula };
+  val.alignment = { horizontal: 'right', vertical: 'middle' };
+  val.numFmt = '#,##0';
+  val.font = boldFont;
+  val.border = BORDER_THIN;
+  val.fill = FILL_GRAY;
+  ws.getCell(`H${rowNum}`).border = BORDER_THIN;
+  ws.getCell(`H${rowNum}`).fill = FILL_GRAY;
+  ws.getCell(`I${rowNum}`).border = BORDER_THIN;
+  ws.getCell(`I${rowNum}`).fill = FILL_GRAY;
+}
+function shiftBottomImageRows(drawingXml, rowShift) {
+  if (rowShift === 0) return drawingXml;
+  const parts = drawingXml.split(/(<xdr:twoCellAnchor[^>]*>)/);
+  let result = parts[0];
+  for (let i = 1; i < parts.length; i += 2) {
+    const openTag = parts[i];
+    const rest = parts[i + 1] || '';
+    const firstRowMatch = rest.match(/<xdr:row>(\d+)<\/xdr:row>/);
+    const firstRow = firstRowMatch ? parseInt(firstRowMatch[1]) : 0;
+    if (firstRow >= 40) {
+      result += openTag + rest.replace(/<xdr:row>(\d+)<\/xdr:row>/g, (m, num) =>
+        `<xdr:row>${parseInt(num) + rowShift}</xdr:row>`);
+    } else {
+      result += openTag + rest;
+    }
+  }
+  return result;
+}
+
+// ============================================================
+// 4. UI 로직
+// ============================================================
+let quoteData = null;
+let defaultSelections = {};
+
+const uploadArea = document.getElementById('uploadArea');
+const fileInput = document.getElementById('fileInput');
+
+uploadArea.addEventListener('click', () => fileInput.click());
+uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+uploadArea.addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadArea.classList.remove('dragover');
+  if (e.dataTransfer.files.length > 0) {
+    fileInput.files = e.dataTransfer.files;
+    handleFileUpload(e.dataTransfer.files[0]);
+  }
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length > 0) handleFileUpload(fileInput.files[0]);
+});
+
+async function handleFileUpload(file) {
+  const fileNameEl = document.getElementById('fileName');
+  fileNameEl.textContent = file.name;
+  fileNameEl.classList.remove('hidden');
+
+  document.getElementById('parseError').classList.add('hidden');
+  document.getElementById('parseLoading').classList.remove('hidden');
+
+  try {
+    const text = await file.text();
+    const result = parseDellXml(text);
+    quoteData = result;
+
+    // 기본 선택값 계산
+    defaultSelections = {};
+    quoteData.models.forEach((model, mi) => {
+      defaultSelections[mi] = {};
+      model.buildLines.forEach((line, li) => {
+        defaultSelections[mi][li] = getDefaultSelected(line.description);
+      });
+    });
+
+    populateForm();
+    renderModelList();
+
+    document.getElementById('step2').classList.remove('hidden');
+    document.getElementById('step3').classList.remove('hidden');
+    document.getElementById('step4').classList.remove('hidden');
+  } catch (err) {
+    const errEl = document.getElementById('parseError');
+    errEl.textContent = 'XML 파싱 오류: ' + err.message;
+    errEl.classList.remove('hidden');
+  } finally {
+    document.getElementById('parseLoading').classList.add('hidden');
+  }
+}
+
+function populateForm() {
+  document.getElementById('quoteDate').value = quoteData.docDate || '';
+  document.getElementById('recipient').value = quoteData.resellerName || '';
+  if (quoteData.docNumber) {
+    document.getElementById('quoteNumber').value = 'SCGS-' + quoteData.docNumber;
+  }
+}
+
+function renderModelList() {
+  const container = document.getElementById('modelList');
+  container.innerHTML = '';
+  quoteData.models.forEach((model, mi) => {
+    const section = document.createElement('div');
+    section.className = 'model-section';
+    const header = document.createElement('div');
+    header.className = 'model-header';
+    header.innerHTML = `
+      <input type="checkbox" checked data-model="${mi}" onchange="toggleModel(${mi}, this.checked)">
+      <div class="model-info">
+        <div class="model-name">${escapeHtml(model.description)}</div>
+        <div class="model-detail">${model.category} | 수량: ${model.qty} | 단가: ${formatNumber(model.unitPrice)}원</div>
+      </div>
+      <button class="toggle-btn" onclick="toggleCollapse(this)">접기</button>
+    `;
+    const body = document.createElement('div');
+    body.className = 'model-body';
+    model.buildLines.forEach((line, li) => {
+      const isDefault = defaultSelections[mi]?.[li] !== false;
+      const div = document.createElement('div');
+      div.className = 'build-line' + (isDefault ? '' : ' filtered');
+      div.innerHTML = `
+        <input type="checkbox" ${isDefault ? 'checked' : ''} data-model="${mi}" data-line="${li}" id="line-${mi}-${li}">
+        <label for="line-${mi}-${li}">${escapeHtml(line.description)}</label>
+        ${line.qty >= 2 ? `<span class="qty">x${line.qty}</span>` : ''}
+      `;
+      body.appendChild(div);
+    });
+    section.appendChild(header);
+    section.appendChild(body);
+    container.appendChild(section);
+  });
+}
+
+function toggleModel(mi, checked) {
+  document.querySelectorAll(`input[data-model="${mi}"][data-line]`).forEach(cb => { cb.checked = checked; });
+}
+function toggleCollapse(btn) {
+  const body = btn.closest('.model-section').querySelector('.model-body');
+  if (body.style.display === 'none') { body.style.display = ''; btn.textContent = '접기'; }
+  else { body.style.display = 'none'; btn.textContent = '펼치기'; }
+}
+function getSelectedItems() {
+  const selected = {};
+  document.querySelectorAll('input[data-line]').forEach(cb => {
+    const mi = cb.dataset.model;
+    const li = cb.dataset.line;
+    if (!selected[mi]) selected[mi] = {};
+    selected[mi][li] = cb.checked;
+  });
+  return selected;
+}
+
+async function generateExcel() {
+  const btn = document.getElementById('generateBtn');
+  const loading = document.getElementById('genLoading');
+  const errEl = document.getElementById('genError');
+  btn.disabled = true;
+  loading.classList.remove('hidden');
+  errEl.classList.add('hidden');
+
+  const userInput = {
+    quoteNumber: document.getElementById('quoteNumber').value,
+    quoteDate: document.getElementById('quoteDate').value,
+    recipient: document.getElementById('recipient').value,
+    validityPeriod: document.getElementById('validityPeriod').value,
+    paymentTerms: document.getElementById('paymentTerms').value,
+    maintenance: document.getElementById('maintenance').value,
+    bankAccount: document.getElementById('bankAccount').value,
+    manager: document.getElementById('manager').value,
+  };
+
+  try {
+    const blob = await generateScgsExcelBrowser(quoteData, userInput, getSelectedItems());
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = (userInput.quoteNumber || 'SCGS_견적서') + '.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    errEl.textContent = 'Excel 생성 오류: ' + err.message;
+    errEl.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+    loading.classList.add('hidden');
+  }
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+function formatNumber(n) { return n.toLocaleString('ko-KR'); }
+</script>
+</body>
+</html>
