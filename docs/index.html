@@ -110,6 +110,11 @@
           <label>담당자</label>
           <input type="text" id="manager" value="Dell 사업부 홍길동 대리">
         </div>
+        <div class="form-group full">
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+            <input type="checkbox" id="noInstallFee"> 설치비 미포함 문구 추가
+          </label>
+        </div>
       </div>
     </div>
 
@@ -144,6 +149,7 @@ function parseDellXml(xmlString) {
   const header = docEl.getElementsByTagName('DOCUMENT_HEADER')[0];
   const summary = docEl.getElementsByTagName('SUMMARY_TOTALS')[0];
   const reseller = docEl.getElementsByTagName('RESELLER_ADDRESS')[0];
+  const endUser = docEl.getElementsByTagName('END_USER_ADDRESS')[0];
 
   const models = [];
   const modelBuildRows = getTags(docEl, 'MODEL_BUILD_ROW');
@@ -169,6 +175,8 @@ function parseDellXml(xmlString) {
     docNumber: getTag(header, 'DOCUMENT_NUMBER') || getTag(docEl, 'DOC_NUMBER'),
     docDate: getTag(header, 'DOC_DATE'),
     resellerName: reseller ? getTag(reseller, 'COMPANY_NAME') : '',
+    endUserContact: endUser ? (getTag(endUser, 'CUSTOMER_NAME') ||
+      ((getTag(endUser, 'FIRST_NAME') + ' ' + getTag(endUser, 'LAST_NAME')).trim())) : '',
     models,
   };
 }
@@ -252,11 +260,13 @@ async function generateScgsExcelBrowser(quoteData, userInput, selectedItems) {
   ws.getCell('D4').value = userInput.quoteNumber || '';
   const dateStr = userInput.quoteDate || quoteData.docDate || '';
   if (dateStr) {
-    const d = new Date(dateStr + 'T12:00:00');
-    ws.getCell('D5').value = d;
-    ws.getCell('D5').numFmt = 'YYYY-MM-DD';
+    ws.getCell('D5').value = dateStr;
   }
   ws.getCell('D6').value = userInput.recipient || quoteData.resellerName || '';
+  const refText = quoteData.endUserContact || '';
+  if (refText) {
+    ws.getCell('D7').value = refText;
+  }
 
   // --- 기존 병합 해제 & 클리어 ---
   const merges = [...(ws.model.merges || [])];
@@ -372,13 +382,19 @@ async function generateScgsExcelBrowser(quoteData, userInput, selectedItems) {
     { text: `4. 결제 계좌 : ${userInput.bankAccount || ''}` },
     { text: `5. 담당자 : ${userInput.manager || ''}` },
   ];
+  if (userInput.noInstallFee) {
+    remarksLines.push({
+      text: '6. 위 견적은 설치비를 포함하지 않았습니다.',
+      color: 'FFFF0000'
+    });
+  }
   for (let i = 0; i < remarksLines.length; i++) {
     const r = remarksStart + i;
     ws.getRow(r).height = 16;
     const cell = ws.getCell(`B${r}`);
     cell.value = remarksLines[i].text;
     cell.alignment = { horizontal: 'left', vertical: 'middle' };
-    cell.font = { ...FONT_BASE, size: remarksLines[i].size || 9, bold: remarksLines[i].bold || false, color: { theme: 1 } };
+    cell.font = { ...FONT_BASE, size: remarksLines[i].size || 9, bold: remarksLines[i].bold || false, color: remarksLines[i].color ? { argb: remarksLines[i].color } : { theme: 1 } };
     if (i === 0) {
       cell.border = BORDER_TOP_LEFT;
       for (let c = 3; c <= 8; c++) ws.getCell(r, c).border = BORDER_TOP_ONLY;
@@ -402,8 +418,7 @@ async function generateScgsExcelBrowser(quoteData, userInput, selectedItems) {
   orderCell.value = '당사는 이 견적서상의 가격 및 조건들을 수용하며, 이 견적서를 귀사에 대한 공식 발주서로 대신하는데 동의합니다.';
   orderCell.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
   orderCell.font = { ...FONT_BASE, size: 10, bold: true, color: { argb: 'FFFF0000' } };
-  orderCell.border = BORDER_LEFT;
-  ws.getCell(`I${orderStart}`).border = BORDER_RIGHT;
+  orderCell.border = { left: THIN_SIDE, right: THIN_SIDE };
 
   ws.getCell(`B${orderStart + 1}`).border = BORDER_LEFT;
   ws.getCell(`I${orderStart + 1}`).border = BORDER_RIGHT;
@@ -423,9 +438,9 @@ async function generateScgsExcelBrowser(quoteData, userInput, selectedItems) {
     ws.mergeCells(`${lblStart}${r}:${lblEnd}${r}`);
     const lbl = ws.getCell(`${lblStart}${r}`);
     lbl.value = ol.label;
-    lbl.alignment = { horizontal: 'right', vertical: 'middle' };
+    lbl.alignment = { horizontal: 'left', vertical: 'middle' };
     lbl.font = { ...FONT_BASE, size: 10, bold: true, color: { theme: 1 } };
-    lbl.border = isLast ? BORDER_BOTTOM_LEFT : BORDER_LEFT;
+    lbl.border = isLast ? { bottom: THIN_SIDE, left: THIN_SIDE } : { left: THIN_SIDE };
     if (ol.valueText) {
       const [valStart, valEnd] = ol.valueMerge.split(':');
       ws.mergeCells(`${valStart}${r}:${valEnd}${r}`);
@@ -703,6 +718,7 @@ async function generateExcel() {
     maintenance: document.getElementById('maintenance').value,
     bankAccount: document.getElementById('bankAccount').value,
     manager: document.getElementById('manager').value,
+    noInstallFee: document.getElementById('noInstallFee').checked,
   };
 
   try {
