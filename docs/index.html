@@ -269,6 +269,14 @@ async function generateScgsExcelBrowser(quoteData, userInput, selectedItems) {
     ws.getCell('D7').value = refText;
   }
 
+  // 템플릿 이미지영역 row height 보존 (CI 비율 유지용)
+  const ORIG_IMAGE_BASE = 50;
+  const savedImageRowHeights = {};
+  for (let r = ORIG_IMAGE_BASE; r <= ORIG_IMAGE_BASE + 10; r++) {
+    const h = ws.getRow(r).height;
+    if (h != null) savedImageRowHeights[r - ORIG_IMAGE_BASE] = h;
+  }
+
   // --- 기존 병합 해제 & 클리어 ---
   const merges = [...(ws.model.merges || [])];
   for (const mergeRef of merges) {
@@ -428,12 +436,13 @@ async function generateScgsExcelBrowser(quoteData, userInput, selectedItems) {
     { label: 'ㆍ배송지 :', labelMerge: 'B:C', valueMerge: 'D:H', valueText: '' },
     { label: 'ㆍ수령인 : ', labelMerge: 'B:C', valueMerge: 'D:H', valueText: '(성명)                  (연락처)' },
     { label: 'ㆍ세금계산서 담당자 :', labelMerge: 'B:D', valueMerge: 'E:H', valueText: '' },
-    { label: 'ㆍ발주업체 :', labelMerge: 'B:C', valueMerge: 'D:I', valueText: '                                        (아래 빈 공간에 업체의 명판 및 인감을 날인해 주십시오. 명판,직인이 날인되지 않은 경우 정상 발주되지 않을 수 있습니다.)' },
+    { label: 'ㆍ발주업체 :', labelMerge: 'B:C', valueMerge: 'D:I', valueText: '(아래 빈 공간에 업체의 명판 및 인감을 날인해 주십시오. 명판,직인이 날인되지 않은 경우 정상 발주되지 않을 수 있습니다.)', indent: 15 },
   ];
+
+  // 1단계: merge + content 설정
   for (let i = 0; i < orderLabels.length; i++) {
     const r = orderStart + 2 + i;
     const ol = orderLabels[i];
-    const isLast = (i === orderLabels.length - 1);
     ws.getRow(r).height = 20;
     const [lblStart, lblEnd] = ol.labelMerge.split(':');
     ws.mergeCells(`${lblStart}${r}:${lblEnd}${r}`);
@@ -441,22 +450,41 @@ async function generateScgsExcelBrowser(quoteData, userInput, selectedItems) {
     lbl.value = ol.label;
     lbl.alignment = { horizontal: 'left', vertical: 'middle' };
     lbl.font = { ...FONT_BASE, size: 10, bold: true, color: { theme: 1 } };
-    lbl.border = { left: THIN_SIDE };
     if (ol.valueText) {
       const [valStart, valEnd] = ol.valueMerge.split(':');
       ws.mergeCells(`${valStart}${r}:${valEnd}${r}`);
       const v = ws.getCell(`${valStart}${r}`);
       v.value = ol.valueText;
-      v.alignment = { horizontal: 'left', vertical: 'middle' };
+      v.alignment = { horizontal: 'left', vertical: 'middle', indent: ol.indent || 0 };
       v.font = { ...FONT_BASE, size: 10, color: { argb: 'FF808080' } };
     }
-    ws.getCell(`I${r}`).border = BORDER_RIGHT;
+  }
+
+  // 2단계: border 설정 (merge 완료 후 별도로 설정해야 ExcelJS가 정상 반영)
+  for (let i = 0; i < orderLabels.length; i++) {
+    const r = orderStart + 2 + i;
+    const ol = orderLabels[i];
+    const [lblStart] = ol.labelMerge.split(':');
+    // 왼쪽 border: label master cell
+    ws.getCell(`${lblStart}${r}`).border = { left: THIN_SIDE };
+    // 오른쪽 border: valueMerge가 I열 포함이면 value master에, 아니면 I열 독립 셀에
+    if (ol.valueText) {
+      const [valStart, valEnd] = ol.valueMerge.split(':');
+      if (valEnd === 'I') {
+        ws.getCell(`${valStart}${r}`).border = { right: THIN_SIDE };
+      } else {
+        ws.getCell(`I${r}`).border = { right: THIN_SIDE };
+      }
+    } else {
+      ws.getCell(`I${r}`).border = { right: THIN_SIDE };
+    }
   }
 
   // 발주업체 아래 6줄 gap (left/right border + 마지막줄 bottom)
   const orderEndRow = orderStart + 2 + orderLabels.length - 1;
   for (let gap = 1; gap <= 6; gap++) {
     const gr = orderEndRow + gap;
+    ws.getRow(gr).height = 13.5;
     ws.getCell(`B${gr}`).border = (gap === 6) ? BORDER_BOTTOM_LEFT : BORDER_LEFT;
     ws.getCell(`I${gr}`).border = (gap === 6) ? BORDER_BOTTOM_RIGHT : BORDER_RIGHT;
     if (gap === 6) {
@@ -467,8 +495,13 @@ async function generateScgsExcelBrowser(quoteData, userInput, selectedItems) {
 
   // --- 하단 이미지 위치 계산 ---
   const newImageBaseRow = orderEnd + 6;
-  const origImageBaseRow = 50;
+  const origImageBaseRow = ORIG_IMAGE_BASE;
   const rowShift = newImageBaseRow - origImageBaseRow;
+
+  // 이미지영역 row height 복원 (CI 비율 유지)
+  for (const [offset, height] of Object.entries(savedImageRowHeights)) {
+    ws.getRow(newImageBaseRow + parseInt(offset)).height = height;
+  }
 
   const wwwRow = newImageBaseRow + 4;
   ws.getCell(`I${wwwRow}`).value = 'www.scgs.co.kr';
@@ -568,11 +601,15 @@ function shiftBottomImageRows(drawingXml, rowShift) {
   const parts = drawingXml.split(/(<xdr:twoCellAnchor[^>]*>)/);
   let result = parts[0];
   for (let i = 1; i < parts.length; i += 2) {
-    const openTag = parts[i];
+    let openTag = parts[i];
     const rest = parts[i + 1] || '';
     const firstRowMatch = rest.match(/<xdr:row>(\d+)<\/xdr:row>/);
     const firstRow = firstRowMatch ? parseInt(firstRowMatch[1]) : 0;
     if (firstRow >= 40) {
+      // editAs="oneCell"로 이미지 비율 고정 (셀 크기 변경 시 리사이즈 방지)
+      if (!openTag.includes('editAs')) {
+        openTag = openTag.replace('>', ' editAs="oneCell">');
+      }
       result += openTag + rest.replace(/<xdr:row>(\d+)<\/xdr:row>/g, (m, num) =>
         `<xdr:row>${parseInt(num) + rowShift}</xdr:row>`);
     } else {
