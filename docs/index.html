@@ -325,8 +325,11 @@ async function generateScgsExcelBrowser(quoteData, userInput, selectedItems) {
 
   let currentRow = ITEM_START_ROW;
   let itemNo = 1;
+  let computedSubtotal = 0;
 
   for (const { model, filteredLines } of modelRows) {
+    const amount = model.unitPrice * model.qty;
+    computedSubtotal += amount;
     ws.getRow(currentRow).height = 33.6;
     setCell(ws, currentRow, 2, itemNo, centerAlign, BORDER_THIN, font10Bold);
     ws.mergeCells(`C${currentRow}:D${currentRow}`);
@@ -335,7 +338,7 @@ async function generateScgsExcelBrowser(quoteData, userInput, selectedItems) {
     setCell(ws, currentRow, 5, model.description, leftAlign, BORDER_THIN, font10Bold);
     setCell(ws, currentRow, 6, model.qty, centerAlign, BORDER_THIN, font10Bold, '#,##0');
     setCellWithFill(ws, currentRow, 7, model.unitPrice, { vertical: 'middle' }, BORDER_THIN, font10, '#,##0', FILL_G);
-    setCell(ws, currentRow, 8, { formula: `G${currentRow}*F${currentRow}` }, { vertical: 'middle' }, BORDER_THIN, font10Bold, '#,##0');
+    setCell(ws, currentRow, 8, { formula: `G${currentRow}*F${currentRow}`, result: amount }, { vertical: 'middle' }, BORDER_THIN, font10Bold, '#,##0');
     setCell(ws, currentRow, 9, null, null, BORDER_THIN);
     currentRow++;
 
@@ -361,14 +364,18 @@ async function generateScgsExcelBrowser(quoteData, userInput, selectedItems) {
   const subtotalRow = currentRow;
   const vatRow = currentRow + 1;
   const totalRow = currentRow + 2;
-  writeTotalRow(ws, subtotalRow, '합계(VAT별도)', `SUM(H${ITEM_START_ROW}:H${lastItemRow})`);
-  writeTotalRow(ws, vatRow, '부가세', `G${subtotalRow}*10%`);
-  writeTotalRow(ws, totalRow, '제안가 합계(VAT포함)', `G${subtotalRow}+G${vatRow}`);
+  const computedVat = Math.floor(computedSubtotal * 0.1);
+  const computedTotal = computedSubtotal + computedVat;
+  writeTotalRow(ws, subtotalRow, '합계(VAT별도)', `SUM(H${ITEM_START_ROW}:H${lastItemRow})`, computedSubtotal);
+  writeTotalRow(ws, vatRow, '부가세', `G${subtotalRow}*10%`, computedVat);
+  writeTotalRow(ws, totalRow, '제안가 합계(VAT포함)', `G${subtotalRow}+G${vatRow}`, computedTotal);
 
-  // 견적금액
+  // 견적금액 — 수식 유지 + result 캐시에 한글 금액 문자열 설정
+  const koreanText = numberToKorean(computedTotal);
+  const formattedNum = computedTotal.toLocaleString('ko-KR');
   ws.getCell('D9').value = {
     formula: `TEXT(G${totalRow},"[DBNum4][$-412]G/표준 ")&"  ("&TEXT(G${totalRow},"#,##0")&", VAT포함)"`,
-    result: '',
+    result: `${koreanText}  (${formattedNum}, VAT포함)`,
   };
 
   // --- REMARKS ---
@@ -552,6 +559,37 @@ async function generateScgsExcelBrowser(quoteData, userInput, selectedItems) {
   return await outZip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
 }
 
+// 숫자 → 한글 금액 변환 (예: 67589962 → "육천칠백오십팔만구천구백육십이")
+function numberToKorean(num) {
+  if (num === 0) return '영';
+  const digits = ['', '일', '이', '삼', '사', '오', '육', '칠', '팔', '구'];
+  const smallUnits = ['', '십', '백', '천'];
+  const bigUnits = ['', '만', '억', '조', '경'];
+  num = Math.round(num);
+  if (num === 0) return '영';
+  const groups = [];
+  let n = num;
+  while (n > 0) {
+    groups.push(n % 10000);
+    n = Math.floor(n / 10000);
+  }
+  let result = '';
+  for (let i = groups.length - 1; i >= 0; i--) {
+    const g = groups[i];
+    if (g === 0) continue;
+    let groupStr = '';
+    let rem = g;
+    for (let u = 3; u >= 0; u--) {
+      const d = Math.floor(rem / Math.pow(10, u));
+      rem %= Math.pow(10, u);
+      if (d === 0) continue;
+      groupStr += (d === 1 && u > 0) ? smallUnits[u] : digits[d] + smallUnits[u];
+    }
+    result += groupStr + bigUnits[i];
+  }
+  return result;
+}
+
 function setCell(ws, row, col, value, alignment, border, font, numFmt) {
   const cell = ws.getCell(row, col);
   if (value !== null && value !== undefined) cell.value = value;
@@ -569,7 +607,7 @@ function setCellWithFill(ws, row, col, value, alignment, border, font, numFmt, f
   if (numFmt) cell.numFmt = numFmt;
   if (fill) cell.fill = fill;
 }
-function writeTotalRow(ws, rowNum, label, formula) {
+function writeTotalRow(ws, rowNum, label, formula, cachedResult) {
   const boldFont = { ...FONT_BASE, size: 11, bold: true, color: { theme: 1 } };
   ws.getRow(rowNum).height = 20;
   ws.mergeCells(`B${rowNum}:F${rowNum}`);
@@ -585,7 +623,7 @@ function writeTotalRow(ws, rowNum, label, formula) {
   }
   ws.mergeCells(`G${rowNum}:H${rowNum}`);
   const val = ws.getCell(`G${rowNum}`);
-  val.value = { formula };
+  val.value = cachedResult != null ? { formula, result: cachedResult } : { formula };
   val.alignment = { horizontal: 'right', vertical: 'middle' };
   val.numFmt = '#,##0';
   val.font = boldFont;
